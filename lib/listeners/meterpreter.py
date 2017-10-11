@@ -109,7 +109,7 @@ class Listener:
             print helpers.color("[!] listeners/meterpreter generate_launcher(): invalid listener name specification!")
 
 
-    def generate_stager(self, encode=False, encrypt=True, obfuscate=False, obfuscationCommand="", language=None):
+    def generate_stager(self, useWindowHandler='False', encode=False, encrypt=True, obfuscate=False, obfuscationCommand="", language=None):
         """
         Nothing to actually generate here for foreign listeners.
         """
